@@ -23,6 +23,9 @@
         ::-webkit-scrollbar-track { background: #0f172a; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        /* ✅ ESTILOS PARA EL 7° NÚMERO */
+        .numero-regular { background: #1e293b; color: #cbd5e1; border: 1px solid #334155; }
+        .numero-extra { background: linear-gradient(135deg, #b45309 0%, #92400e 100%); color: #fef3c7; border: 2px solid #f59e0b; box-shadow: 0 0 8px rgba(245, 158, 11, 0.3); font-weight: bold; }
     </style>
 </head>
 <body class="bg-slate-950 text-slate-200 overflow-auto">
@@ -352,14 +355,23 @@
                                 <tbody class="divide-y divide-slate-800">
                 `;
                 series.forEach(s => {
-                    const extra = s.extra_number ? `<span class="text-amber-400 font-bold ml-3">(+${s.extra_number})</span>` : '';
+                    // ✅ RENDERIZADO MEJORADO DEL 7° NÚMERO
+                    let numerosHTML = s.numbers.map(n => 
+                        `<span class="inline-block numero-regular px-1.5 py-0.5 rounded mx-0.5">${String(n).padStart(2, '0')}</span>`
+                    ).join('');
+                    
+                    if (s.extra_number !== null && s.extra_number !== undefined && s.extra_number !== "") {
+                        numerosHTML += `<span style="display:inline-block; margin-left: 8px; margin-right: 4px; color: #94a3b8; font-size: 10px;">|</span>`;
+                        numerosHTML += `<span class="inline-block numero-extra px-2 py-0.5 rounded mx-0.5" title="7° número">7️⃣ ${String(s.extra_number).padStart(2, '0')}</span>`;
+                    }
+
                     html += `
                         <tr class="hover:bg-slate-800/40">
                             <td class="py-2.5 font-bold text-slate-500 text-center">#${s.series_index}</td>
                             <td>${s.fecha}</td>
                             <td class="text-sky-400 mono">${s.sorteo}</td>
                             <td class="text-center mono text-sm">
-                                ${s.numbers.map(n => `<span class="inline-block bg-slate-800 text-slate-200 px-1.5 py-0.5 rounded mx-0.5">${String(n).padStart(2, '0')}</span>`).join('')}${extra}
+                                ${numerosHTML}
                             </td>
                             <td class="text-center space-x-1">
                                 <button onclick="openEditModal('${s.id}')" class="text-sky-400 hover:text-sky-300 px-1">Editar</button>
