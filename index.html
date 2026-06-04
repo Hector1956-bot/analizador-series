@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analizador de Patrones Numéricos - Suite Completa</title>
+    <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lucide@0.263.0/dist/umd/lucide.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+    <link rel="stylesheet" href="fonts.css">
+    <style>
+        * { font-family: 'Outfit', sans-serif; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .tab-active { background: #1e293b; color: #38bdf8; border-bottom: 2px solid #38bdf8; }
+        .tab-inactive { background: #0f172a; color: #64748b; border-bottom: 2px solid transparent; }
+        .tab-inactive:hover { color: #94a3b8; }
+        .stat-card { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; }
+        .glow { box-shadow: 0 0 20px rgba(56, 189, 248, 0.1); }
+        .input-num { width: 50px; text-align: center; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        .fade-in { animation: fadeIn 0.3s ease; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-200 overflow-auto">
+    <div class="w-full h-full flex flex-col min-h-screen">
+        <header class="px-6 py-4 border-b border-slate-800 flex items-center justify-between flex-shrink-0 bg-slate-950 sticky top-0 z-10">
+            <h1 class="text-xl font-bold text-sky-400">Analizador de Patrones Numéricos</h1>
+            <div class="flex items-center gap-4">
+                <span class="text-xs text-slate-500 mono" id="record-count">0 series</span>
+                <button id="clear-all-data" class="text-xs bg-red-900/30 hover:bg-red-800/50 text-red-300 px-2 py-1 rounded transition-colors">🗑️ Limpiar Todo</button>
+            </div>
+        </header>
+
+        <nav class="flex flex-shrink-0 border-b border-slate-800 bg-slate-950 overflow-x-auto" id="tabs">
+            <button data-tab="10" class="tab-active px-5 py-3 text-sm font-medium transition-all whitespace-nowrap">📊 Serie 10</button>
+            <button data-tab="6_Q" class="tab-inactive px-5 py-3 text-sm font-medium transition-all whitespace-nowrap">🎲 Serie 6_Q</button>
+            <button data-tab="6_L" class="tab-inactive px-5 py-3 text-sm font-medium transition-all whitespace-nowrap">🎯 Serie 6_L</button>
+            <button data-tab="5" class="tab-inactive px-5 py-3 text-sm font-medium transition-all whitespace-nowrap">🔢 Serie 5</button>
+            <button data-tab="analysis" class="tab-inactive px-5 py-3 text-sm font-medium transition-all whitespace-nowrap">📈 Estadísticas</button>
+            <button data-tab="entry-analysis" class="tab-inactive px-5 py-3 text-sm font-medium transition-all whitespace-nowrap">🎯 Análisis Entrada</button>
+        </nav>
+
+        <main class="flex-1 overflow-auto p-6" id="main-content"></main>
+
+        <div id="toast" class="fixed bottom-4 right-4 bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm hidden transition-all shadow-lg z-50"></div>
+    </div>
+
+    <div id="edit-modal" class="fixed inset-0 bg-black/70 flex items-center justify-center hidden z-50 p-4">
+        <div class="stat-card rounded-xl p-6 max-w-lg w-full bg-slate-900 border border-slate-700">
+            <h3 class="text-md font-bold text-sky-400 mb-4">✏️ Editar Registro</h3>
+            <div class="space-y-4" id="edit-modal-fields"></div>
+            <div class="flex justify-end gap-2 mt-6">
+                <button onclick="closeEditModal()" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-xs text-white rounded">Cancelar</button>
+                <button id="save-edit-btn" class="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-xs text-white rounded">Guardar Cambios</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============ SISTEMA SQL ENGINE (SQLite WASM) ============
+        let db;
+        let currentTab = '10';
+        const MODALITIES = { '10': 10, '6_Q': 6, '6_L': 6, '5': 5 };
+        let editingId = null;
+        let searchQuery = "";
+
+        async function initSQL() {
+            const SQL = await initSqlJs({ locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}` });
+            const savedBinary = localStorage.getItem('sql_db_binary');
+            if (savedBinary) {
+                const u8 = new Uint8Array(savedBinary.split(',').map(Number));
+                db = new SQL.Database(u8);
+            } else {
+                db = new SQL.Database();
+                db.run(`CREATE TABLE IF NOT EXISTS series (
+                    id TEXT PRIMARY KEY,
+                    modality TEXT,
+                    series_index INTEGER,
+                    fecha TEXT,
+                    sorteo TEXT,
+                    numbers TEXT,
+                    extra_number INTEGER,
+                    created_at TEXT
+                );`);
+                persistSQL();
+            }
+            updateRecordCount();
+            renderCurrentView();
+        }
+
+        function persistSQL() {
+            const binary = db.export();
+            localStorage.setItem('sql_db_binary', binary.toString());
+            updateRecordCount();
+        }
+
+        function updateRecordCount() {
+            const res = db.exec("SELECT COUNT(*) FROM series");
+            const count = res[0] ? res[0].values[0][0] : 0;
+            const counter = document.getElementById('record-count');
+            if (counter) counter.textContent = `${count} series`;
+        }
+
+        function getSeriesSQL(modality, search = "") {
+            let query = "SELECT * FROM series WHERE modality = '" + modality + "'";
+            if (search.trim() !== "") {
+                const cleanSearch = search.replace(/'/g, "''");
+                query += ` AND (fecha LIKE '%${cleanSearch}%' OR sorteo LIKE '%${cleanSearch}%' OR numbers LIKE '%${cleanSearch}%')`;
+            }
+            query += " ORDER BY series_index ASC";
+            
+            const res = db.exec(query);
+            if (!res[0]) return [];
+            
+            const columns = res[0].columns;
+            return res[0].values.map(row => {
+                const item = {};
+                columns.forEach((col, i) => { item[col] = row[i]; });
+                item.numbers = JSON.parse(item.numbers);
+                return item;
+            });
+        }
+
+        // ============ ALTAS / BAJAS / EDICIÓN ============
+        function addSeries(series) {
+            const id = Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            const createdAt = new Date().toISOString();
+            db.run(`INSERT INTO series VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [
+                id, series.modality, series.series_index, series.fecha, series.sorteo, JSON.stringify(series.numbers), series.extra_number, createdAt
+            ]);
+            persistSQL();
+            renderCurrentView();
+            showToast('✅ Registro insertado en SQL');
+        }
+
+        function deleteSeries(id) {
+            if (!confirm('¿Seguro que deseas eliminar esta serie?')) return;
+            const targetRes = db.exec(`SELECT modality FROM series WHERE id='${id}'`);
+            if(!targetRes[0]) return;
+            const mod = targetRes[0].values[0][0];
+
+            db.run(`DELETE FROM series WHERE id = ?`, [id]);
+            
+            const rows = getSeriesSQL(mod);
+            rows.forEach((row, index) => {
+                db.run(`UPDATE series SET series_index = ? WHERE id = ?`, [index + 1, row.id]);
+            });
+
+            persistSQL();
+            renderCurrentView();
+            showToast('🗑️ Registro eliminado');
+        }
+
+        function openEditModal(id) {
+            editingId = id;
+            const res = db.exec(`SELECT * FROM series WHERE id='${id}'`);
+            if (!res[0]) return;
+            
+            const columns = res[0].columns;
+            const values = res[0].values[0];
+            const item = {};
+            columns.forEach((col, i) => { item[col] = values[i]; });
+            const numbers = JSON.parse(item.numbers);
+
+            let html = `
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">Fecha</label>
+                    <input type="text" id="edit-fecha" value="${item.fecha}" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm text-white">
+                </div>
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">Sorteo N°</label>
+                    <input type="text" id="edit-sorteo" value="${item.sorteo}" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm text-white">
+                </div>
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">Números (Separados por coma)</label>
+                    <input type="text" id="edit-numbers" value="${numbers.join(', ')}" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm mono text-white">
+                </div>
+            `;
+            if (item.extra_number !== null && item.extra_number !== undefined && item.extra_number !== "") {
+                html += `
+                    <div>
+                        <label class="text-xs text-slate-400 block mb-1">Número Extra (7°)</label>
+                        <input type="number" id="edit-extra" value="${item.extra_number}" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm text-amber-400">
+                    </div>
+                `;
+            }
+            document.getElementById('edit-modal-fields').innerHTML = html;
+            document.getElementById('edit-modal').classList.remove('hidden');
+        }
+
+        function closeEditModal() {
+            document.getElementById('edit-modal').classList.add('hidden');
+            editingId = null;
+        }
+
+        document.getElementById('save-edit-btn').addEventListener('click', () => {
+            if (!editingId) return;
+            const fecha = document.getElementById('edit-fecha').value.trim();
+            const sorteo = document.getElementById('edit-sorteo').value.trim();
+            const parsedNums = document.getElementById('edit-numbers').value.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n));
+            
+            let extra = null;
+            const extraEl = document.getElementById('edit-extra');
+            if (extraEl) extra = parseInt(extraEl.value) || null;
+
+            db.run(`UPDATE series SET fecha=?, sorteo=?, numbers=?, extra_number=? WHERE id=?`, [
+                fecha, sorteo, JSON.stringify(parsedNums), extra, editingId
+            ]);
+
+            persistSQL();
+            closeEditModal();
+            renderCurrentView();
+            showToast('✏️ Serie editada exitosamente');
+        });
+
+        function clearAllData() {
+            if (confirm('⚠️ ¿Estás seguro? Se purgará el banco de datos completo de SQLite.')) {
+                db.run("DELETE FROM series;");
+                persistSQL();
+                renderCurrentView();
+                showToast('🗑️ Base de datos SQL vaciada');
+            }
+        }
+
+        // ============ INTERFAZ INPUT AUTOMÁTICO Y PARSER ============
+        function setupAutoAdvance() {
+            const inputs = document.querySelectorAll('.input-num');
+            inputs.forEach(input => {
+                input.addEventListener('input', (e) => {
+                    if (e.target.value.length > 2) e.target.value = e.target.value.slice(0, 2);
+                    if (e.target.value.length === 2) {
+                        const currentIdx = parseInt(e.target.dataset.idx);
+                        const nextInput = document.querySelector(`.input-num[data-idx="${currentIdx + 1}"]`);
+                        if (nextInput) nextInput.focus();
+                    }
+                });
+            });
+        }
+
+        function procesarTextoPegado(textoRaw, modality) {
+            const lineas = textoRaw.split('\n');
+            let acumuladorBloque = { fecha: '', sorteo: '', numeros: [] };
+            let seriesProcesadas = 0;
+            const regexFecha = /(?:Fecha|FECHA)[:\s]*([0-9]{2}[-/][0-9]{2}[-/][0-9]{4})/i;
+            const regexSorteo = /(?:Sorteo N°|Sorteo|SORTEO)[:\s]*([0-9]+)/i;
+
+            lineas.forEach(linea => {
+                const matchFecha = linea.match(regexFecha);
+                const matchSorteo = linea.match(regexSorteo);
+                if (matchFecha) acumuladorBloque.fecha = matchFecha[1];
+                if (matchSorteo) acumuladorBloque.sorteo = matchSorteo[1];
+
+                const numerosEnLinea = linea.replace(/(Fecha|Sorteo|N°|[\d]{2}-[\d]{2}-[\d]{4})/gi, '')
+                                            .split(/[\s,.\-_]+/)
+                                            .map(n => parseInt(n.trim()))
+                                            .filter(n => !isNaN(n));
+
+                if (numerosEnLinea.length >= MODALITIES[modality]) {
+                    acumuladorBloque.numeros = numerosEnLinea.slice(0, MODALITIES[modality]);
+                    let extra = null;
+                    if (modality === '6_L' && numerosEnLinea.length > MODALITIES[modality]) {
+                        extra = numerosEnLinea[MODALITIES[modality]];
+                    }
+                    const conteoActual = getSeriesSQL(modality).length;
+                    addSeries({
+                        modality: modality,
+                        series_index: conteoActual + 1,
+                        fecha: acumuladorBloque.fecha || new Date().toLocaleDateString('es-ES'),
+                        sorteo: acumuladorBloque.sorteo || 'S/N',
+                        numbers: acumuladorBloque.numeros,
+                        extra_number: extra
+                    });
+                    seriesProcesadas++;
+                    acumuladorBloque = { fecha: '', sorteo: '', numeros: [] };
+                }
+            });
+            return seriesProcesadas;
+        }
+
+        function renderModality(mod) {
+            const main = document.getElementById('main-content');
+            const count = MODALITIES[mod];
+            const series = getSeriesSQL(mod, searchQuery);
+            const nextIndex = getSeriesSQL(mod).length + 1;
+            const is6L = mod === '6_L';
+            // ✅ FUNCIÓN RECUPERADA: Solicitar 7° número cada 4 series en modalidad 6_L
+            const needsExtra = is6L && (nextIndex % 4 === 0);
+
+            let html = `
+                <div class="fade-in max-w-4xl mx-auto space-y-6">
+                    <div class="stat-card rounded-xl p-4 flex gap-4 items-center">
+                        <div class="flex-1 relative">
+                            <input type="text" id="search-input" value="${searchQuery}" placeholder="🔍 Buscar series por fecha, número de sorteo o patrones específicos..." class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-sm text-white focus:border-sky-500 focus:outline-none">
+                        </div>
+                        ${searchQuery ? `<button onclick="clearSearch()" class="text-xs text-rose-400 hover:underline">Limpiar Filtro</button>` : ''}
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="stat-card rounded-xl p-5 glow">
+                            <h2 class="text-sm font-semibold text-sky-400 mb-3">📝 Ingresar Serie #${nextIndex} (${mod})</h2>
+                            <form id="series-form" class="space-y-3">
+                                <div class="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label class="text-[11px] text-slate-400 block mb-1">Fecha</label>
+                                        <input type="date" id="ins-fecha" required class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs text-white">
+                                    </div>
+                                    <div>
+                                        <label class="text-[11px] text-slate-400 block mb-1">Sorteo N°</label>
+                                        <input type="text" id="ins-sorteo" required placeholder="Ej: 1331" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs text-white">
+                                    </div>
+                                </div>
+                                <div class="flex flex-wrap gap-1.5 items-center">
+            `;
+
+            for (let i = 0; i < count; i++) {
+                html += `<input type="number" class="input-num bg-slate-800 border border-slate-600 rounded px-1 py-1.5 text-sm mono text-white focus:border-sky-400 focus:outline-none" placeholder="${i+1}" data-idx="${i}" min="0" max="99" required>`;
+            }
+            // ✅ RECUPERADO: Input para 7° número cuando needsExtra es true
+            if (needsExtra) {
+                html += `<span class="text-xs text-amber-400 mx-1 font-semibold">+Extra:</span>
+                    <input type="number" id="extra-num" class="input-num bg-slate-800 border border-amber-500 rounded px-1 py-1.5 text-sm mono text-amber-300 focus:border-amber-400 focus:outline-none" placeholder="7°" min="0" max="99" required>`;
+            }
+
+            html += `
+                                </div>
+                                <button type="submit" class="w-full mt-2 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium py-2 rounded transition-colors">+ Agregar Entrada Manual</button>
+                            </form>
+                        </div>
+
+                        <div class="stat-card rounded-xl p-5">
+                            <h2 class="text-sm font-semibold text-violet-400 mb-1">📋 Pegado Masivo o Formateado</h2>
+                            <textarea id="bulk-paste-area" placeholder='Ejemplo:\nFecha 04-10-2023\nSorteo N° 1331\n01 , 02 , 03 , 04 ...' class="w-full h-28 bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs mono text-slate-300 focus:border-violet-500 focus:outline-none"></textarea>
+                            <button id="bulk-paste-btn" class="w-full mt-2 bg-violet-700 hover:bg-violet-600 text-white text-xs font-medium py-2 rounded transition-colors">⚡ Procesar Bloque</button>
+                        </div>
+                    </div>
+            `;
+
+            if (series.length > 0) {
+                html += `
+                    <div class="stat-card rounded-xl p-5">
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse text-xs">
+                                <thead>
+                                    <tr class="border-b border-slate-700 text-slate-400">
+                                        <th class="py-2 text-center">Índice</th><th>Fecha</th><th>Sorteo</th><th class="py-2 text-center">Patrón Numérico</th><th class="py-2 text-center">Acciones</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-800">
+                `;
+                series.forEach(s => {
+                    const extra = s.extra_number ? `<span class="text-amber-400 font-bold ml-3">(+${s.extra_number})</span>` : '';
+                    html += `
+                        <tr class="hover:bg-slate-800/40">
+                            <td class="py-2.5 font-bold text-slate-500 text-center">#${s.series_index}</td>
+                            <td>${s.fecha}</td>
+                            <td class="text-sky-400 mono">${s.sorteo}</td>
+                            <td class="text-center mono text-sm">
+                                ${s.numbers.map(n => `<span class="inline-block bg-slate-800 text-slate-200 px-1.5 py-0.5 rounded mx-0.5">${String(n).padStart(2, '0')}</span>`).join('')}${extra}
+                            </td>
+                            <td class="text-center space-x-1">
+                                <button onclick="openEditModal('${s.id}')" class="text-sky-400 hover:text-sky-300 px-1">Editar</button>
+                                <button onclick="deleteSeries('${s.id}')" class="text-rose-400 hover:text-rose-300 px-1">Eliminar</button>
+                            </td>
+                        </tr>
+                    `;
+                });
+                html += `</tbody></table></div></div>`;
+            } else {
+                html += `<div class="stat-card rounded-xl p-8 text-center text-slate-500"><p>📭 No hay registros en esta modalidad.</p></div>`;
+            }
+
+            // ✅ RECUPERADO: Mensaje informativo sobre el 7° número cada 4 series
+            if (is6L) {
+                html += `<div class="stat-card rounded-xl p-3 text-center"><p class="text-xs text-amber-400">✨ El 7° número se solicita cada 4 series (series 4, 8, 12...)</p></div>`;
+            }
+
+            main.innerHTML = html;
+            setupAutoAdvance();
+
+            document.getElementById('series-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const rawFecha = document.getElementById('ins-fecha').value.split('-');
+                const fechaFormateada = `${rawFecha[2]}-${rawFecha[1]}-${rawFecha[0]}`;
+                const sorteo = document.getElementById('ins-sorteo').value.trim();
+                const inputs = e.target.querySelectorAll('input[data-idx]');
+                const nums = [...inputs].map(i => parseInt(i.value));
+                let extra = null;
+                // ✅ RECUPERADO: Captura el 7° número si needsExtra es true
+                if (needsExtra) {
+                    const extraInput = document.getElementById('extra-num');
+                    if (!extraInput.value) {
+                        showToast('❌ Por favor ingresa el 7° número', true);
+                        return;
+                    }
+                    extra = parseInt(extraInput.value);
+                }
+
+                addSeries({
+                    modality: mod,
+                    series_index: getSeriesSQL(mod).length + 1,
+                    fecha: fechaFormateada,
+                    sorteo: sorteo,
+                    numbers: nums,
+                    extra_number: extra
+                });
+            });
+
+            document.getElementById('bulk-paste-btn').addEventListener('click', () => {
+                const area = document.getElementById('bulk-paste-area');
+                const procesados = procesarTextoPegado(area.value, mod);
+                if (procesados > 0) {
+                    showToast(`⚡ Se importaron ${procesados} series.`);
+                    area.value = '';
+                    renderCurrentView();
+                } else {
+                    showToast('❌ Formato no reconocido', true);
+                }
+            });
+
+            document.getElementById('search-input').addEventListener('input', (e) => {
+                searchQuery = e.target.value;
+                clearTimeout(window.searchTimeout);
+                window.searchTimeout = setTimeout(() => {
+                    renderCurrentView();
+                    document.getElementById('search-input').focus();
+                }, 300);
+            });
+        }
+
+        function clearSearch() { searchQuery = ""; renderCurrentView(); }
+
+        // ============ CÁLCULOS MATEMÁTICOS DE COMPORTAMIENTO INDIVIDUAL ============
+        function calculateNumberBehaviorSQL(mod) {
+            const series = getSeriesSQL(mod);
+            const allNums = series.map(s => s.numbers);
+            const uniqueNums = [...new Set(allNums.flat())].sort((a, b) => a - b);
+            const numberBehavior = {};
+            
+            uniqueNums.forEach(num => {
+                const appearances = [];
+                const positionOccurrences = {};
+                let lastSeriesIdx = -1;
+                let totalAppearances = 0;
+                
+                allNums.forEach((nums, seriesIdx) => {
+                    const positions = nums.map((n, pos) => n === num ? pos : -1).filter(p => p !== -1);
+                    if (positions.length > 0) {
+                        appearances.push({ series: seriesIdx + 1, positions });
+                        positions.forEach(p => { positionOccurrences[p] = (positionOccurrences[p] || 0) + 1; });
+                        lastSeriesIdx = seriesIdx;
+                        totalAppearances++;
+                    }
+                });
+                
+                const gaps = [];
+                for (let i = 1; i < appearances.length; i++) {
+                    gaps.push(appearances[i].series - appearances[i - 1].series - 1);
+                }
+                
+                const avgGap = gaps.length > 0 ? (gaps.reduce((a, b) => a + b, 0) / gaps.length) : 0;
+                const maxGap = gaps.length > 0 ? Math.max(...gaps) : 0;
+                const minGap = gaps.length > 0 ? Math.min(...gaps) : 0;
+                const variance = gaps.length > 1 ? gaps.reduce((sum, g) => sum + Math.pow(g - avgGap, 2), 0) / gaps.length : 0;
+                const stdDev = Math.sqrt(variance);
+                const preferredPos = Object.entries(positionOccurrences).sort((a, b) => b[1] - a[1])[0];
+                const appearanceFreq = (totalAppearances / series.length * 100);
+                const currentAbsence = series.length - 1 - lastSeriesIdx;
+                
+                numberBehavior[num] = {
+                    appearances: totalAppearances,
+                    appearanceFreq,
+                    avgGap: avgGap.toFixed(1),
+                    maxGap,
+                    minGap,
+                    stdDev: stdDev.toFixed(2),
+                    preferredPos: preferredPos ? parseInt(preferredPos[0]) + 1 : '-',
+                    currentAbsence
+                };
+            });
+            
+            return { numberBehavior, series, allNums, uniqueNums };
+        }
+
+        // ============ VISTA DE ESTADÍSTICAS ============
+        function renderAnalysis() {
+            const main = document.getElementById('main-content');
+            let html = `
+                <div class="fade-in max-w-6xl mx-auto space-y-4">
+                    <div class="flex flex-wrap justify-between items-center bg-slate-900 p-3 rounded-xl border border-slate-800 gap-2">
+                        <div class="flex gap-1.5 flex-wrap" id="analysis-mod-tabs">
+                            <button class="bg-sky-600 text-white text-xs px-3 py-1.5 rounded font-medium" data-mod="10">📊 Serie 10</button>
+                            <button class="bg-slate-800 text-slate-400 text-xs px-3 py-1.5 rounded font-medium hover:text-white" data-mod="6_Q">🎲 Serie 6_Q</button>
+                            <button class="bg-slate-800 text-slate-400 text-xs px-3 py-1.5 rounded font-medium hover:text-white" data-mod="6_L">🎯 Serie 6_L</button>
+                            <button class="bg-slate-800 text-slate-400 text-xs px-3 py-1.5 rounded font-medium hover:text-white" data-mod="5">🔢 Serie 5</button>
+                        </div>
+                        <div class="flex gap-1.5 flex-wrap" id="analysis-view-tabs">
+                            <button class="bg-sky-600 text-white text-xs px-3 py-1.5 rounded font-medium" data-view="general">📈 Análisis General</button>
+                            <button class="bg-slate-800 text-slate-400 text-xs px-3 py-1.5 rounded font-medium hover:text-white" data-view="individual">🔍 Comportamiento Individual</button>
+                            <button class="bg-slate-800 text-slate-400 text-xs px-3 py-1.5 rounded font-medium hover:text-white" data-view="predictions">🔮 Predicciones</button>
+                        </div>
+                    </div>
+                    <div id="sub-analysis-content" class="fade-in"></div>
+                </div>
+            `;
+            main.innerHTML = html;
+            
+            let selectedMod = '10';
+            let selectedView = 'general';
+
+            const executeAnalysisView = () => {
+                const out = document.getElementById('sub-analysis-content');
+                const series = getSeriesSQL(selectedMod);
+
+                if (series.length < 3) {
+                    out.innerHTML = `
+                        <div class="stat-card rounded-xl p-8 text-center text-slate-400">
+                            📭 Se requieren por lo menos 3 series registradas en SQLite para compilar el módulo analítico.<br>
+                            <span class="text-xs text-slate-600">Registros actuales en esta modalidad: ${series.length}</span>
+                        </div>
+                    `;
+                    return;
+                }
+
+                if (selectedView === 'general') {
+                    const allNums = series.map(s => s.numbers);
+                    const countCasillas = MODALITIES[selectedMod];
+                    const freqGlobal = {};
+                    allNums.flat().forEach(n => { freqGlobal[n] = (freqGlobal[n] || 0) + 1; });
+                    const sortedFreq = Object.entries(freqGlobal).sort((a,b)=>b[1]-a[1]);
+                    const top10 = sortedFreq.slice(0, 10);
+                    const bottom5 = sortedFreq.slice(-5).reverse();
+
+                    const posStats = Array.from({ length: countCasillas }, (_, idx) => {
+                        const values = allNums.map(s => s[idx]);
+                        const mean = values.reduce((a,b)=>a+b, 0) / values.length;
+                        const sortedVals = [...values].sort((a,b)=>a-b);
+                        const min = sortedVals[0];
+                        const max = sortedVals[sortedVals.length - 1];
+                        
+                        const counts = {}; values.forEach(v => counts[v] = (counts[v]||0)+1);
+                        const mode = Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
+
+                        return { pos: idx + 1, mean: mean.toFixed(1), mode, min, max };
+                    });
+
+                    const pairFreq = {};
+                    allNums.forEach(nums => {
+                        for (let i = 0; i < nums.length; i++) {
+                            for (let j = i + 1; j < nums.length; j++) {
+                                const key = [Math.min(nums[i], nums[j]), Math.max(nums[i], nums[j])].join('-');
+                                pairFreq[key] = (pairFreq[key] || 0) + 1;
+                            }
+                        }
+                    });
+                    const topPairs = Object.entries(pairFreq).sort((a, b) => b[1] - a[1]).slice(0, 8);
+
+                    out.innerHTML = `
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="stat-card rounded-xl p-4">
+                                <h3 class="text-xs font-semibold text-sky-400 mb-3">🔢 Frecuencias Destacadas (Global)</h3>
+                                <div class="space-y-1.5">
+                                    ${top10.map(([n, f]) => `
+                                        <div class="flex items-center gap-2">
+                                            <span class="mono text-xs w-6 text-right">${String(n).padStart(2,'0')}</span>
+                                            <div class="flex-1 bg-slate-900 rounded h-3 border border-slate-800">
+                                                <div class="bg-sky-500 rounded h-full text-[9px] font-bold text-center leading-3 text-slate-950" style="width:${Math.max((f/series.length)*100, 12)}%">${f}</div>
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                                <p class="text-[11px] text-slate-500 mt-3">Menos frecuentes: ${bottom5.map(([n, f]) => `<span class="mono text-rose-400 font-bold">${n}</span>(${f}v)`).join(', ')}</p>
+                            </div>
+
+                            <div class="stat-card rounded-xl p-4">
+                                <h3 class="text-xs font-semibold text-sky-400 mb-3">📊 Métricas por Posición en Serie</h3>
+                                <div class="overflow-x-auto">
+                                    <table class="w-full text-left border-collapse text-[11px]">
+                                        <thead>
+                                            <tr class="text-slate-500 border-b border-slate-800"><th class="pb-1">Casilla</th><th>Media</th><th>Moda</th><th>Mín</th><th>Máx</th></tr>
+                                        </thead>
+                                        <tbody class="divide-y divide-slate-800/60">
+                                            ${posStats.map(s => `<tr><td class="py-1.5 font-bold text-slate-400">Pos ${s.pos}</td><td class="mono">${s.mean}</td><td class="mono text-sky-300 font-bold">${s.mode}</td><td class="mono text-emerald-400">${s.min}</td><td class="mono text-rose-400">${s.max}</td></tr>`).join('')}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div class="stat-card rounded-xl p-4">
+                                <h3 class="text-xs font-semibold text-violet-400 mb-2">👥 Pares más Repetidos (Coincidencias)</h3>
+                                <div class="grid grid-cols-2 gap-2 mt-2">
+                                    ${topPairs.map(([pair, f]) => `<div class="flex justify-between items-center text-xs bg-slate-900/60 rounded p-2 border border-slate-800/80"><span class="mono text-violet-300 tracking-wider font-bold">[ ${pair.split('-').map(x=>x.padStart(2,'0')).join(' , ')} ]</span><span class="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded">${f} veces</span></div>`).join('')}
+                                </div>
+                            </div>
+
+                            <div class="stat-card rounded-xl p-4 flex flex-col justify-center">
+                                <h3 class="text-xs font-semibold text-amber-400 mb-1">⚖️ Balance de Paridad Global</h3>
+                                <p class="text-xs text-slate-400 mt-1">Evaluación de comportamiento de dígitos Pares contra Impares.</p>
+                                <div class="mt-3 space-y-1 text-xs mono">
+                                    <div>Pares Totales: <span class="text-emerald-400 font-bold">${allNums.flat().filter(n => n % 2 === 0).length}</span></div>
+                                    <div>Impares Totales: <span class="text-sky-400 font-bold">${allNums.flat().filter(n => n % 2 !== 0).length}</span></div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+
+                } else if (selectedView === 'individual') {
+                    const { numberBehavior, uniqueNums } = calculateNumberBehaviorSQL(selectedMod);
+                    
+                    let innerHtml = `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">`;
+                    uniqueNums.forEach(num => {
+                        const b = numberBehavior[num];
+                        innerHtml += `
+                            <div class="stat-card rounded-xl p-3 border-l-4 border-sky-500 bg-slate-900">
+                                <div class="flex justify-between items-center mb-1"><span class="mono text-base font-bold text-sky-300">${String(num).padStart(2,'0')}</span><span class="text-[10px] text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded">Ausencia: ${b.currentAbsence} s</span></div>
+                                <div class="text-[11px] space-y-0.5">
+                                    <div><span class="text-slate-500">Apariciones:</span> ${b.appearances} <span class="text-slate-600">(${b.appearanceFreq.toFixed(1)}%)</span></div>
+                                    <div><span class="text-slate-500">Brecha Promedio:</span> ${b.avgGap} <span class="text-slate-600">(±${b.stdDev})</span></div>
+                                    <div><span class="text-slate-500">Casilla Preferida:</span> Pos ${b.preferredPos}</div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    innerHtml += `</div>`;
+                    out.innerHTML = innerHtml;
+
+                } else if (selectedView === 'predictions') {
+                    const { numberBehavior, uniqueNums, series } = calculateNumberBehaviorSQL(selectedMod);
+                    const predictions = {};
+
+                    uniqueNums.forEach(num => {
+                        const b = numberBehavior[num];
+                        const freq = b.appearances / series.length;
+                        const absenceScore = b.currentAbsence / (parseFloat(b.avgGap) || 1);
+                        const consistency = 1 / (1 + parseFloat(b.stdDev));
+                        const confidence = Math.min(100, (absenceScore * 30 + freq * 40 + consistency * 30));
+                        predictions[num] = confidence.toFixed(1);
+                    });
+
+                    const topPredicted = Object.entries(predictions).sort((a, b) => parseFloat(b[1]) - parseFloat(a[1])).slice(0, 10);
+
+                    out.innerHTML = `
+                        <div class="stat-card rounded-xl p-4 border-l-4 border-violet-500 mb-4 bg-slate-900">
+                            <h3 class="text-sm font-semibold text-violet-300">🔮 Proyección Algorítmica para Próxima Serie (#${series.length + 1})</h3>
+                            <p class="text-[11px] text-slate-400 mt-0.5">Cálculo dinámico basado en índices de ausencia, variabilidad y frecuencia histórica calculada desde SQLite.</p>
+                        </div>
+                        <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                            ${topPredicted.map(([num, conf], idx) => `
+                                <div class="stat-card rounded-xl p-3 text-center bg-slate-900 border border-slate-800">
+                                    <div class="text-[10px] text-slate-500 font-bold mb-1">PROYECCIÓN #${idx+1}</div>
+                                    <div class="text-2xl font-bold text-sky-400 font-mono">${String(num).padStart(2,'0')}</div>
+                                    <div class="text-xs font-semibold mt-1 ${parseFloat(conf) > 60 ? 'text-emerald-400' : 'text-amber-400'}">${conf}% confianza</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                }
+            };
+
+            const modButtons = main.querySelectorAll('#analysis-mod-tabs button');
+            modButtons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    modButtons.forEach(b => { b.className = 'bg-slate-800 text-slate-400 text-xs px-3 py-1.5 rounded font-medium hover:text-white'; });
+                    btn.className = 'bg-sky-600 text-white text-xs px-3 py-1.5 rounded font-medium';
+                    selectedMod = btn.dataset.mod;
+                    executeAnalysisView();
+                });
+            });
+
+            const viewButtons = main.querySelectorAll('#analysis-view-tabs button');
+            viewButtons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    viewButtons.forEach(b => { b.className = 'bg-slate-800 text-slate-400 text-xs px-3 py-1.5 rounded font-medium hover:text-white'; });
+                    btn.className = 'bg-sky-600 text-white text-xs px-3 py-1.5 rounded font-medium';
+                    selectedView = btn.dataset.view;
+                    executeAnalysisView();
+                });
+            });
+
+            executeAnalysisView();
+        }
+
+        // ============ ANÁLISIS DE ENTRADA DINÁMICO ============
+        function renderEntryAnalysis() {
+            const main = document.getElementById('main-content');
+            main.innerHTML = `
+                <div class="fade-in max-w-4xl mx-auto stat-card rounded-xl p-6">
+                    <h2 class="text-sm font-semibold text-sky-400 mb-2">🎯 Análisis Rápido de Frecuencias en SQL</h2>
+                    <p class="text-xs text-slate-400">Muestra el desglose total de repeticiones de dígitos almacenados en las tablas del motor SQL.</p>
+                    <select id="quick-mod-select" class="bg-slate-800 border border-slate-600 text-xs text-white rounded px-3 py-1.5 mt-2 focus:outline-none">
+                        <option value="10">Serie 10</option><option value="6_Q">Serie 6_Q</option><option value="6_L">Serie 6_L</option><option value="5">Serie 5</option>
+                    </select>
+                    <div id="quick-analysis-output" class="mt-4 grid grid-cols-3 sm:grid-cols-6 gap-2"></div>
+                </div>
+            `;
+            
+            const run = () => {
+                const mod = document.getElementById('quick-mod-select').value;
+                const out = document.getElementById('quick-analysis-output');
+                const series = getSeriesSQL(mod);
+                if(series.length === 0) { out.innerHTML = '<p class="text-xs text-slate-500 col-span-6">Sin registros guardados.</p>'; return; }
+                
+                const freq = {};
+                series.map(s => s.numbers).flat().forEach(n => { freq[n] = (freq[n] || 0) + 1; });
+                
+                out.innerHTML = Object.entries(freq).sort((a,b)=>a[0]-b[0]).map(([n, f]) => `
+                    <div class="bg-slate-900/60 p-2 rounded text-center border border-slate-800">
+                        <div class="text-base font-bold text-sky-400 font-mono">${String(n).padStart(2,'0')}</div>
+                        <div class="text-[9px] text-slate-500">${f} repeticiones</div>
+                    </div>
+                `).join('');
+            };
+
+            document.getElementById('quick-mod-select').addEventListener('change', run);
+            run();
+        }
+
+        // ============ RUTINAS GLOBALES INTERCONECTADAS ============
+        document.getElementById('tabs').addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-tab]');
+            if (!btn) return;
+            currentTab = btn.dataset.tab;
+            searchQuery = ""; 
+            document.querySelectorAll('#tabs button').forEach(b => {
+                b.className = b.dataset.tab === currentTab ? 'tab-active px-5 py-3 text-sm font-medium transition-all whitespace-nowrap' : 'tab-inactive px-5 py-3 text-sm font-medium transition-all whitespace-nowrap';
+            });
+            renderCurrentView();
+        });
+
+        document.getElementById('clear-all-data').addEventListener('click', clearAllData);
+
+        function renderCurrentView() {
+            if (currentTab === 'analysis') renderAnalysis();
+            else if (currentTab === 'entry-analysis') renderEntryAnalysis();
+            else renderModality(currentTab);
+        }
+
+        function showToast(msg, isError = false) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.className = `fixed bottom-4 right-4 text-white px-4 py-2 rounded-lg text-sm transition-all shadow-lg z-50 ${isError ? 'bg-rose-600' : 'bg-emerald-600'}`;
+            t.classList.remove('hidden');
+            setTimeout(() => { t.classList.add('hidden'); }, 3000);
+        }
+
+        window.addEventListener('DOMContentLoaded', initSQL);
+    </script>
+</body>
+</html>
