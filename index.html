@@ -23,9 +23,14 @@
         ::-webkit-scrollbar-track { background: #0f172a; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #475569; }
-        /* ✅ ESTILOS PARA EL 7° NÚMERO */
+        /* ✅ ESTILOS PARA EL 7° NÚMERO - PERFECTAMENTE ALINEADO */
         .numero-regular { background: #1e293b; color: #cbd5e1; border: 1px solid #334155; }
         .numero-extra { background: linear-gradient(135deg, #b45309 0%, #92400e 100%); color: #fef3c7; border: 2px solid #f59e0b; box-shadow: 0 0 8px rgba(245, 158, 11, 0.3); font-weight: bold; }
+        /* ✅ CONTENEDOR DE NÚMEROS CON ESPACIAMIENTO RESERVADO PARA EL 7° */
+        .numeros-container { display: flex; gap: 2px; align-items: center; justify-content: center; min-height: 28px; }
+        .numeros-base { display: flex; gap: 2px; flex-wrap: wrap; justify-content: center; }
+        .separador-extra { width: 20px; display: flex; align-items: center; justify-content: center; color: #64748b; font-size: 10px; }
+        .espacio-extra { width: 60px; display: flex; align-items: center; justify-content: center; }
     </style>
 </head>
 <body class="bg-slate-950 text-slate-200 overflow-auto">
@@ -355,15 +360,25 @@
                                 <tbody class="divide-y divide-slate-800">
                 `;
                 series.forEach(s => {
-                    // ✅ RENDERIZADO MEJORADO DEL 7° NÚMERO
-                    let numerosHTML = s.numbers.map(n => 
-                        `<span class="inline-block numero-regular px-1.5 py-0.5 rounded mx-0.5">${String(n).padStart(2, '0')}</span>`
-                    ).join('');
+                    // ✅ RENDERIZADO MEJORADO CON CONTENEDOR ALINEADO
+                    let numerosHTML = `<div class="numeros-container">`;
+                    numerosHTML += `<div class="numeros-base">`;
+                    
+                    s.numbers.forEach(n => {
+                        numerosHTML += `<span class="inline-block numero-regular px-1.5 py-0.5 rounded">${String(n).padStart(2, '0')}</span>`;
+                    });
+                    
+                    numerosHTML += `</div>`;
                     
                     if (s.extra_number !== null && s.extra_number !== undefined && s.extra_number !== "") {
-                        numerosHTML += `<span style="display:inline-block; margin-left: 8px; margin-right: 4px; color: #94a3b8; font-size: 10px;">|</span>`;
-                        numerosHTML += `<span class="inline-block numero-extra px-2 py-0.5 rounded mx-0.5" title="7° número">7️⃣ ${String(s.extra_number).padStart(2, '0')}</span>`;
+                        numerosHTML += `<div class="separador-extra">|</div>`;
+                        numerosHTML += `<span class="inline-block numero-extra px-2 py-0.5 rounded" title="7° número">7️⃣ ${String(s.extra_number).padStart(2, '0')}</span>`;
+                    } else {
+                        // ✅ ESPACIADOR INVISIBLE PARA MANTENER ALINEACIÓN
+                        numerosHTML += `<div class="espacio-extra"></div>`;
                     }
+                    
+                    numerosHTML += `</div>`;
 
                     html += `
                         <tr class="hover:bg-slate-800/40">
