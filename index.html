@@ -23,14 +23,32 @@
         ::-webkit-scrollbar-track { background: #0f172a; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #475569; }
-        /* ✅ ESTILOS PARA EL 7° NÚMERO - PERFECTAMENTE ALINEADO */
         .numero-regular { background: #1e293b; color: #cbd5e1; border: 1px solid #334155; }
         .numero-extra { background: linear-gradient(135deg, #b45309 0%, #92400e 100%); color: #fef3c7; border: 2px solid #f59e0b; box-shadow: 0 0 8px rgba(245, 158, 11, 0.3); font-weight: bold; }
-        /* ✅ CONTENEDOR DE NÚMEROS CON ESPACIAMIENTO RESERVADO PARA EL 7° */
-        .numeros-container { display: flex; gap: 2px; align-items: center; justify-content: center; min-height: 28px; }
-        .numeros-base { display: flex; gap: 2px; flex-wrap: wrap; justify-content: center; }
-        .separador-extra { width: 20px; display: flex; align-items: center; justify-content: center; color: #64748b; font-size: 10px; }
-        .espacio-extra { width: 60px; display: flex; align-items: center; justify-content: center; }
+        .numeros-container { 
+            display: grid; 
+            grid-template-columns: 1fr auto auto; 
+            align-items: center; 
+            min-height: 28px; 
+            width: 100%;
+            gap: 4px;
+        }
+        .numeros-base { 
+            display: flex; 
+            gap: 2px; 
+            flex-wrap: wrap; 
+            justify-content: center; 
+        }
+        .extra-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            justify-content: flex-start; 
+        }
+        .separador-extra { 
+            color: #64748b; 
+            font-size: 10px; 
+        }
     </style>
 </head>
 <body class="bg-slate-950 text-slate-200 overflow-auto">
@@ -69,13 +87,13 @@
     </div>
 
     <script>
-        // ============ SISTEMA SQL ENGINE (SQLite WASM) ============
         let db;
         let currentTab = '10';
         const MODALITIES = { '10': 10, '6_Q': 6, '6_L': 6, '5': 5 };
         let editingId = null;
         let searchQuery = "";
 
+        // ============ INICIALIZACIÓN SQL LOCAL ============
         async function initSQL() {
             const SQL = await initSqlJs({ locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}` });
             const savedBinary = localStorage.getItem('sql_db_binary');
@@ -249,43 +267,59 @@
             });
         }
 
+        // ✅ PARSER MEJORADO - ACEPTA EL FORMATO RECTILÍNEO CON "Sorteo N°"
         function procesarTextoPegado(textoRaw, modality) {
-            const lineas = textoRaw.split('\n');
-            let acumuladorBloque = { fecha: '', sorteo: '', numeros: [] };
+            const lineas = textoRaw.trim().split('\n');
             let seriesProcesadas = 0;
-            const regexFecha = /(?:Fecha|FECHA)[:\s]*([0-9]{2}[-/][0-9]{2}[-/][0-9]{4})/i;
-            const regexSorteo = /(?:Sorteo N°|Sorteo|SORTEO)[:\s]*([0-9]+)/i;
+            const seriesExistentes = getSeriesSQL(modality);
+            let siguienteIndice = seriesExistentes.length + 1;
 
-            lineas.forEach(linea => {
-                const matchFecha = linea.match(regexFecha);
-                const matchSorteo = linea.match(regexSorteo);
-                if (matchFecha) acumuladorBloque.fecha = matchFecha[1];
-                if (matchSorteo) acumuladorBloque.sorteo = matchSorteo[1];
+            for (const linea of lineas) {
+                const lineaLimpia = linea.trim();
+                if (!lineaLimpia) continue;
 
-                const numerosEnLinea = linea.replace(/(Fecha|Sorteo|N°|[\d]{2}-[\d]{2}-[\d]{4})/gi, '')
-                                            .split(/[\s,.\-_]+/)
-                                            .map(n => parseInt(n.trim()))
-                                            .filter(n => !isNaN(n));
+                try {
+                    // ✅ REGEX MEJORADO: Detecta formato "DD-MM-YYYY    Sorteo N° XXXX    números"
+                    const regexLineaUnica = /^([\d]{2}[-/][\d]{2}[-/][\d]{4})\s+Sorteo\s+N°\s+(\d+)\s+(.+)$/i;
+                    const matchLineaUnica = lineaLimpia.match(regexLineaUnica);
 
-                if (numerosEnLinea.length >= MODALITIES[modality]) {
-                    acumuladorBloque.numeros = numerosEnLinea.slice(0, MODALITIES[modality]);
-                    let extra = null;
-                    if (modality === '6_L' && numerosEnLinea.length > MODALITIES[modality]) {
-                        extra = numerosEnLinea[MODALITIES[modality]];
+                    if (matchLineaUnica) {
+                        const fecha = matchLineaUnica[1];
+                        const sorteoNum = matchLineaUnica[2];
+                        const bloqueNumeros = matchLineaUnica[3];
+
+                        // Extraer todos los números (separados por coma, espacio, punto, etc.)
+                        const todosLosNumeros = bloqueNumeros
+                            .split(/[\s,.\-_|]+/)
+                            .map(n => parseInt(n.trim(), 10))
+                            .filter(n => !isNaN(n) && n >= 0 && n <= 99);
+
+                        if (todosLosNumeros.length >= MODALITIES[modality]) {
+                            const numerosBase = todosLosNumeros.slice(0, MODALITIES[modality]);
+                            
+                            let extra = null;
+                            if (modality === '6_L' && todosLosNumeros.length > MODALITIES[modality]) {
+                                extra = todosLosNumeros[MODALITIES[modality]];
+                            }
+
+                            addSeries({
+                                modality: modality,
+                                series_index: siguienteIndice,
+                                fecha: fecha,
+                                sorteo: `Sorteo N° ${sorteoNum}`,
+                                numbers: numerosBase,
+                                extra_number: extra
+                            });
+
+                            siguienteIndice++;
+                            seriesProcesadas++;
+                        }
                     }
-                    const conteoActual = getSeriesSQL(modality).length;
-                    addSeries({
-                        modality: modality,
-                        series_index: conteoActual + 1,
-                        fecha: acumuladorBloque.fecha || new Date().toLocaleDateString('es-ES'),
-                        sorteo: acumuladorBloque.sorteo || 'S/N',
-                        numbers: acumuladorBloque.numeros,
-                        extra_number: extra
-                    });
-                    seriesProcesadas++;
-                    acumuladorBloque = { fecha: '', sorteo: '', numeros: [] };
+                } catch (err) {
+                    console.error("Error procesando línea:", lineaLimpia, err);
                 }
-            });
+            }
+
             return seriesProcesadas;
         }
 
@@ -295,7 +329,6 @@
             const series = getSeriesSQL(mod, searchQuery);
             const nextIndex = getSeriesSQL(mod).length + 1;
             const is6L = mod === '6_L';
-            // ✅ FUNCIÓN RECUPERADA: Solicitar 7° número cada 4 series en modalidad 6_L
             const needsExtra = is6L && (nextIndex % 4 === 0);
 
             let html = `
@@ -327,7 +360,6 @@
             for (let i = 0; i < count; i++) {
                 html += `<input type="number" class="input-num bg-slate-800 border border-slate-600 rounded px-1 py-1.5 text-sm mono text-white focus:border-sky-400 focus:outline-none" placeholder="${i+1}" data-idx="${i}" min="0" max="99" required>`;
             }
-            // ✅ RECUPERADO: Input para 7° número cuando needsExtra es true
             if (needsExtra) {
                 html += `<span class="text-xs text-amber-400 mx-1 font-semibold">+Extra:</span>
                     <input type="number" id="extra-num" class="input-num bg-slate-800 border border-amber-500 rounded px-1 py-1.5 text-sm mono text-amber-300 focus:border-amber-400 focus:outline-none" placeholder="7°" min="0" max="99" required>`;
@@ -340,8 +372,11 @@
                         </div>
 
                         <div class="stat-card rounded-xl p-5">
-                            <h2 class="text-sm font-semibold text-violet-400 mb-1">📋 Pegado Masivo o Formateado</h2>
-                            <textarea id="bulk-paste-area" placeholder='Ejemplo:\nFecha 04-10-2023\nSorteo N° 1331\n01 , 02 , 03 , 04 ...' class="w-full h-28 bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs mono text-slate-300 focus:border-violet-500 focus:outline-none"></textarea>
+                            <h2 class="text-sm font-semibold text-violet-400 mb-1">📋 Pegado Masivo Rectilíneo</h2>
+                            <p class="text-[10px] text-slate-500 mb-2">Formato: DD-MM-YYYY    Sorteo N° XXXX    05 , 28 , 32 , ...</p>
+                            <textarea id="bulk-paste-area" placeholder='01-02-2025    Sorteo N° 1377    05 , 28 , 32 , 33 , 36
+08-02-2025    Sorteo N° 1378    00 , 11 , 24 , 29 , 35
+15-02-2025    Sorteo N° 1379    03 , 13 , 14 , 29 , 36' class="w-full h-28 bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs mono text-slate-300 focus:border-violet-500 focus:outline-none"></textarea>
                             <button id="bulk-paste-btn" class="w-full mt-2 bg-violet-700 hover:bg-violet-600 text-white text-xs font-medium py-2 rounded transition-colors">⚡ Procesar Bloque</button>
                         </div>
                     </div>
@@ -360,24 +395,23 @@
                                 <tbody class="divide-y divide-slate-800">
                 `;
                 series.forEach(s => {
-                    // ✅ RENDERIZADO MEJORADO CON CONTENEDOR ALINEADO
                     let numerosHTML = `<div class="numeros-container">`;
-                    numerosHTML += `<div class="numeros-base">`;
                     
+                    numerosHTML += `<div class="numeros-base">`;
                     s.numbers.forEach(n => {
                         numerosHTML += `<span class="inline-block numero-regular px-1.5 py-0.5 rounded">${String(n).padStart(2, '0')}</span>`;
                     });
-                    
                     numerosHTML += `</div>`;
-                    
+
                     if (s.extra_number !== null && s.extra_number !== undefined && s.extra_number !== "") {
+                        numerosHTML += `<div class="extra-wrapper">`;
                         numerosHTML += `<div class="separador-extra">|</div>`;
                         numerosHTML += `<span class="inline-block numero-extra px-2 py-0.5 rounded" title="7° número">7️⃣ ${String(s.extra_number).padStart(2, '0')}</span>`;
+                        numerosHTML += `</div>`;
                     } else {
-                        // ✅ ESPACIADOR INVISIBLE PARA MANTENER ALINEACIÓN
-                        numerosHTML += `<div class="espacio-extra"></div>`;
+                        numerosHTML += `<div></div>`;
                     }
-                    
+
                     numerosHTML += `</div>`;
 
                     html += `
@@ -400,7 +434,6 @@
                 html += `<div class="stat-card rounded-xl p-8 text-center text-slate-500"><p>📭 No hay registros en esta modalidad.</p></div>`;
             }
 
-            // ✅ RECUPERADO: Mensaje informativo sobre el 7° número cada 4 series
             if (is6L) {
                 html += `<div class="stat-card rounded-xl p-3 text-center"><p class="text-xs text-amber-400">✨ El 7° número se solicita cada 4 series (series 4, 8, 12...)</p></div>`;
             }
@@ -416,7 +449,6 @@
                 const inputs = e.target.querySelectorAll('input[data-idx]');
                 const nums = [...inputs].map(i => parseInt(i.value));
                 let extra = null;
-                // ✅ RECUPERADO: Captura el 7° número si needsExtra es true
                 if (needsExtra) {
                     const extraInput = document.getElementById('extra-num');
                     if (!extraInput.value) {
@@ -430,7 +462,7 @@
                     modality: mod,
                     series_index: getSeriesSQL(mod).length + 1,
                     fecha: fechaFormateada,
-                    sorteo: sorteo,
+                    sorteo: `Sorteo N° ${sorteo}`,
                     numbers: nums,
                     extra_number: extra
                 });
@@ -460,7 +492,7 @@
 
         function clearSearch() { searchQuery = ""; renderCurrentView(); }
 
-        // ============ CÁLCULOS MATEMÁTICOS DE COMPORTAMIENTO INDIVIDUAL ============
+        // ============ CÁLCULOS MATEMÁTICOS ============
         function calculateNumberBehaviorSQL(mod) {
             const series = getSeriesSQL(mod);
             const allNums = series.map(s => s.numbers);
